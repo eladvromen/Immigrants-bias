@@ -1,6 +1,6 @@
 # Model directories
 /models/
-/data/
+
 *.pt
 *.pth
 *.bin
