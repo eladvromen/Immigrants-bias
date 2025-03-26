@@ -137,15 +137,27 @@ def sentence_score_without_group(row, sentence, sentence_template, gender, token
     return results, stereo_score
 
 def main(model_name, run_type):
+    # Define file paths using relative paths
+    input_file = os.path.join("data", "t_and_a_immigration_dataset.csv")
+    
+    # Set output directory based on run_type
+    if run_type == 'translated':
+        output_dir = os.path.join("results", "base_test")
+    else:  # legal
+        output_dir = os.path.join("results", "legal_test")
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
     # Load dataset with explicit handling of separators and cleaning
     try:
         # First attempt to read with tab separator
-        dataset = pd.read_csv('t_and_a_immigration_dataset.csv', sep='\t')
+        dataset = pd.read_csv(input_file, sep='\t')
         
         # If we got only one column with commas, we need to split it
         if len(dataset.columns) == 1:
             # Read the file again treating it as comma-separated
-            dataset = pd.read_csv('t_and_a_immigration_dataset.csv', sep=',')
+            dataset = pd.read_csv(input_file, sep=',')
     except Exception as e:
         print(f"Error reading CSV: {e}")
         return
@@ -230,8 +242,8 @@ def main(model_name, run_type):
         print(f'Bias score for "{group}" group: {percentage}%')
 
     # Save results in both formats
-    tsv_filename = f'results_{run_type}_{model_short_name}.tsv'
-    csv_filename = f'results_{run_type}_{model_short_name}.csv'
+    tsv_filename = os.path.join(output_dir, f'results_{run_type}_{model_short_name}.tsv')
+    csv_filename = os.path.join(output_dir, f'results_{run_type}_{model_short_name}.csv')
     
     results.to_csv(tsv_filename, sep='\t', index=False)
     results.to_csv(csv_filename, index=False)
