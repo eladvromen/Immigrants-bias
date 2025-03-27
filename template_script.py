@@ -3,6 +3,7 @@ from transformers import AutoModel, AutoTokenizer, AutoModelForMaskedLM
 import torch
 import pandas as pd
 import sys
+import argparse
 
 # Set environment variables
 os.environ["HF_HOME"] = "/data/resource/huggingface"
@@ -10,9 +11,9 @@ os.environ["HF_HOME"] = "/data/resource/huggingface"
 def replace_concept_in_sentence(row, sentence, run_type='translated'):
     """
     Replace concept placeholders in sentence based on run type
-    run_type: 'translated' or 'legal'
+    run_type: 'translated', 'legal', or 'legal_with_translated_concept'
     """
-    if run_type == 'translated':
+    if run_type in ['translated', 'legal_with_translated_concept']:
         sentence1 = sentence.replace('[CONCEPT]', row['concept1_masc_translated'])
         sentence2 = sentence.replace('[CONCEPT]', row['concept2_masc_translated'])
         concept1 = row['concept1_masc_translated']
@@ -136,15 +137,72 @@ def sentence_score_without_group(row, sentence, sentence_template, gender, token
 
     return results, stereo_score
 
-def main(model_name, run_type):
-    # Define file paths using relative paths
-    input_file = os.path.join("data", "t_and_a_immigration_dataset.csv")
+def get_top_completions(sentence_template, tokenizer, model, top_k=3):
+    """
+    Get the top k most probable completions for a [CONCEPT] placeholder
+    """
+    # Replace [CONCEPT] with [MASK] token
+    masked_sentence = sentence_template.replace('[CONCEPT]', tokenizer.mask_token)
     
-    # Set output directory based on run_type
-    if run_type == 'translated':
-        output_dir = os.path.join("results", "base_test")
-    else:  # legal
-        output_dir = os.path.join("results", "legal_test")
+    # Encode the sentence
+    inputs = tokenizer(masked_sentence, return_tensors='pt')
+    
+    # Get the position of the [MASK] token
+    mask_position = torch.where(inputs['input_ids'][0] == tokenizer.mask_token_id)[0]
+    
+    # Get model predictions
+    with torch.no_grad():
+        outputs = model(**inputs)
+        predictions = outputs.logits[0, mask_position]
+        
+    # Get top k predictions
+    top_k_scores, top_k_tokens = torch.topk(predictions, top_k, dim=1)
+    
+    # Convert to words and probabilities
+    completions = []
+    for scores, tokens in zip(top_k_scores[0], top_k_tokens[0]):
+        word = tokenizer.decode(tokens)
+        prob = torch.softmax(predictions, dim=1)[0][tokens].item()
+        completions.append((word.strip(), prob))
+    
+    return completions
+
+def process_template(row, sentence_template, group, tokenizer, model, results, 
+                    stereo_score_dict, stereo_groups_dict, run_type):
+    """
+    Process a single template, getting both paired concept scores and top completions
+    """
+    # Get unconditional top completions
+    top_completions = get_top_completions(sentence_template, tokenizer, model)
+    
+    # Get the regular AUL scores for concept pairs
+    if group:
+        results, stereo_score_dict, stereo_groups_dict = sentence_score_with_group(
+            row, sentence_template, sentence_template, group,
+            tokenizer, model, results, stereo_score_dict, stereo_groups_dict
+        )
+    else:
+        results, _ = sentence_score_without_group(
+            row, sentence_template, sentence_template, 'masc',
+            tokenizer, model, results, 0
+        )
+    
+    # Add top completions to the last row of results
+    last_row_idx = results.index[-1]
+    for i, (word, prob) in enumerate(top_completions, 1):
+        results.at[last_row_idx, f'top_{i}_completion'] = word
+        results.at[last_row_idx, f'top_{i}_probability'] = prob
+    
+    return results, stereo_score_dict, stereo_groups_dict
+
+def main(model_name, run_type, input_file=None, output_dir=None):
+    # Define default file paths
+    default_input = os.path.join("data", "t_and_a_immigration_dataset.csv")
+    input_file = input_file or default_input
+    
+    # Set default output directory based on run_type
+    default_output = os.path.join("results", f"{run_type}_test")
+    output_dir = output_dir or default_output
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -185,14 +243,17 @@ def main(model_name, run_type):
     results = pd.DataFrame(columns=[
         'templateId', 'category', 'subcategory', 'group', 
         'sentence_template', 'most_probable_concept', 
-        'concept1', 'concept2', 'score_sentence1', 'score_sentence2'
+        'concept1', 'concept2', 'score_sentence1', 'score_sentence2',
+        'top_1_completion', 'top_1_probability',
+        'top_2_completion', 'top_2_probability',
+        'top_3_completion', 'top_3_probability'
     ])
 
     # Select appropriate columns based on run type
     if run_type == 'translated':
         sentence_col = 'sentence_translated'
         group_col = 'group_translated'
-    else:  # legal
+    else:  # legal or legal_with_translated_concept
         sentence_col = 'legal_augmentation'
         group_col = 'group_translated'
 
@@ -212,25 +273,21 @@ def main(model_name, run_type):
         sentence_template = str(row[sentence_col])
         
         if '[GROUP]' in sentence_template:
-            # Handle templates with [GROUP]
             groups = [g.strip() for g in str(row[group_col]).split(',')]
             
             for group in groups:
                 if not group:  # Skip empty groups
                     continue
                     
-                # Create sentence with current group
                 sentence = sentence_template.replace('[GROUP]', group)
-                
-                results, stereo_score_dict, stereo_groups_dict = sentence_score_with_group(
-                    row, sentence, sentence_template, group,
-                    tokenizer, model, results, stereo_score_dict, stereo_groups_dict
+                results, stereo_score_dict, stereo_groups_dict = process_template(
+                    row, sentence, group, tokenizer, model,
+                    results, stereo_score_dict, stereo_groups_dict, run_type
                 )
         else:
-            # Handle templates without [GROUP]
-            results, stereo_score = sentence_score_without_group(
-                row, sentence_template, sentence_template, 'masc',  # gender default to 'masc' as per original script
-                tokenizer, model, results, 0  # Initialize stereo_score as 0
+            results, stereo_score_dict, stereo_groups_dict = process_template(
+                row, sentence_template, None, tokenizer, model,
+                results, stereo_score_dict, stereo_groups_dict, run_type
             )
 
     # Calculate and print results
@@ -253,9 +310,13 @@ def main(model_name, run_type):
     print(f"- {csv_filename} (CSV format)")
 
 if __name__ == "__main__":
-    # Example usage:
-    # python template_script.py bert-base-uncased translated
-    # python template_script.py nlpaueb/legal-bert-base-uncased legal
-    model_name = sys.argv[1]
-    run_type = sys.argv[2]  # 'translated' or 'legal'
-    main(model_name, run_type) 
+    parser = argparse.ArgumentParser(description='Run bias analysis on transformer models')
+    parser.add_argument('model_name', help='Name or path of the HuggingFace model')
+    parser.add_argument('run_type', 
+                       choices=['translated', 'legal', 'legal_with_translated_concept'], 
+                       help='Type of run to perform')
+    parser.add_argument('--input', help='Path to input dataset (CSV/TSV format)')
+    parser.add_argument('--output', help='Path to output directory')
+    
+    args = parser.parse_args()
+    main(args.model_name, args.run_type, args.input, args.output) 
