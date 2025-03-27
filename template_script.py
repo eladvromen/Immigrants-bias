@@ -26,7 +26,7 @@ def replace_concept_in_sentence(row, sentence, run_type='translated'):
 
     return sentence1, concept1, sentence2, concept2
 
-def sentence_score_with_group(row, sentence, sentence_template, group, tokenizer, model, results, stereo_score_dict, stereo_groups_dict):
+def sentence_score_with_group(row, sentence, sentence_template, group, tokenizer, model, results, stereo_score_dict, stereo_groups_dict, run_type):
     log_softmax = torch.nn.LogSoftmax(dim=1)
     print(sentence)
 
@@ -46,8 +46,7 @@ def sentence_score_with_group(row, sentence, sentence_template, group, tokenizer
     # Track group statistics
     stereo_groups_dict[simplified_group] = stereo_groups_dict.get(simplified_group, 0) + 1
 
-    # Get sentence variations based on run type
-    run_type = 'translated' if 'sentence_translated' in sentence else 'legal'
+    # Use the passed run_type instead of determining it from the sentence
     sentence1, concept1, sentence2, concept2 = replace_concept_in_sentence(row, sentence, run_type)
 
     # Process sentences through model
@@ -96,12 +95,11 @@ def calculate_aul_for_bert(model, token_ids, log_softmax):
     log_prob = torch.mean(token_log_probs)
     return log_prob.item()
 
-def sentence_score_without_group(row, sentence, sentence_template, gender, tokenizer, model, results, stereo_score):
+def sentence_score_without_group(row, sentence, sentence_template, gender, tokenizer, model, results, stereo_score, run_type):
     log_softmax = torch.nn.LogSoftmax(dim=1)
     print(sentence)
 
-    # Get sentence variations based on run type
-    run_type = 'translated' if 'sentence_translated' in sentence else 'legal'
+    # Use the passed run_type instead of determining it from the sentence
     sentence1, concept1, sentence2, concept2 = replace_concept_in_sentence(row, sentence, run_type)
 
     # Process sentences through model
@@ -179,12 +177,12 @@ def process_template(row, sentence_template, group, tokenizer, model, results,
     if group:
         results, stereo_score_dict, stereo_groups_dict = sentence_score_with_group(
             row, sentence_template, sentence_template, group,
-            tokenizer, model, results, stereo_score_dict, stereo_groups_dict
+            tokenizer, model, results, stereo_score_dict, stereo_groups_dict, run_type
         )
     else:
         results, _ = sentence_score_without_group(
             row, sentence_template, sentence_template, 'masc',
-            tokenizer, model, results, 0
+            tokenizer, model, results, 0, run_type
         )
     
     # Add top completions to the last row of results
