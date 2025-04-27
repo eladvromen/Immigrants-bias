@@ -1,10 +1,9 @@
 import pandas as pd
 import numpy as np
 import os
-
 # Get paths to results
 base_dir = 'results'
-base_test_dir = os.path.join(base_dir, 'base_test')
+base_test_dir = os.path.join(base_dir, 'translated_test')
 legal_test_dir = os.path.join(base_dir, 'legal_test')
 
 # Read CSV files (not TSV) based on the script's output format

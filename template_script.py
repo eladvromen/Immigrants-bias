@@ -4,6 +4,7 @@ import torch
 import pandas as pd
 import sys
 import argparse
+import datetime
 
 # Set environment variables
 os.environ["HF_HOME"] = "/data/resource/huggingface"
@@ -26,7 +27,7 @@ def replace_concept_in_sentence(row, sentence, run_type='translated'):
 
     return sentence1, concept1, sentence2, concept2
 
-def sentence_score_with_group(row, sentence, sentence_template, group, tokenizer, model, results, stereo_score_dict, stereo_groups_dict):
+def sentence_score_with_group(row, sentence, sentence_template, group, tokenizer, model, results, stereo_score_dict, stereo_groups_dict, run_type):
     log_softmax = torch.nn.LogSoftmax(dim=1)
     print(sentence)
 
@@ -46,8 +47,7 @@ def sentence_score_with_group(row, sentence, sentence_template, group, tokenizer
     # Track group statistics
     stereo_groups_dict[simplified_group] = stereo_groups_dict.get(simplified_group, 0) + 1
 
-    # Get sentence variations based on run type
-    run_type = 'translated' if 'sentence_translated' in sentence else 'legal'
+    # Use the passed run_type instead of determining it from the sentence
     sentence1, concept1, sentence2, concept2 = replace_concept_in_sentence(row, sentence, run_type)
 
     # Process sentences through model
@@ -96,12 +96,11 @@ def calculate_aul_for_bert(model, token_ids, log_softmax):
     log_prob = torch.mean(token_log_probs)
     return log_prob.item()
 
-def sentence_score_without_group(row, sentence, sentence_template, gender, tokenizer, model, results, stereo_score):
+def sentence_score_without_group(row, sentence, sentence_template, gender, tokenizer, model, results, stereo_score, run_type):
     log_softmax = torch.nn.LogSoftmax(dim=1)
     print(sentence)
 
-    # Get sentence variations based on run type
-    run_type = 'translated' if 'sentence_translated' in sentence else 'legal'
+    # Use the passed run_type instead of determining it from the sentence
     sentence1, concept1, sentence2, concept2 = replace_concept_in_sentence(row, sentence, run_type)
 
     # Process sentences through model
@@ -179,12 +178,12 @@ def process_template(row, sentence_template, group, tokenizer, model, results,
     if group:
         results, stereo_score_dict, stereo_groups_dict = sentence_score_with_group(
             row, sentence_template, sentence_template, group,
-            tokenizer, model, results, stereo_score_dict, stereo_groups_dict
+            tokenizer, model, results, stereo_score_dict, stereo_groups_dict, run_type
         )
     else:
         results, _ = sentence_score_without_group(
             row, sentence_template, sentence_template, 'masc',
-            tokenizer, model, results, 0
+            tokenizer, model, results, 0, run_type
         )
     
     # Add top completions to the last row of results
@@ -207,6 +206,38 @@ def main(model_name, run_type, input_file=None, output_dir=None):
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
+    # Create log file
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_short_name = model_name.split('/')[-1]
+    log_file = os.path.join(output_dir, f"log_{timestamp}_{run_type}_{model_short_name}.txt")
+    
+    # Redirect stdout to both console and log file
+    class Logger:
+        def __init__(self, filename):
+            self.terminal = sys.stdout
+            self.log = open(filename, 'w')
+            
+        def write(self, message):
+            self.terminal.write(message)
+            self.log.write(message)
+            
+        def flush(self):
+            self.terminal.flush()
+            self.log.flush()
+    
+    # Save original stdout and redirect to logger
+    original_stdout = sys.stdout
+    sys.stdout = Logger(log_file)
+    
+    # Log experiment details
+    print(f"=== Experiment Details ===")
+    print(f"Model: {model_name}")
+    print(f"Run type: {run_type}")
+    print(f"Input file: {input_file}")
+    print(f"Output directory: {output_dir}")
+    print(f"Date and time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"==========================\n")
+    
     # Load dataset with explicit handling of separators and cleaning
     try:
         # First attempt to read with tab separator
@@ -218,6 +249,7 @@ def main(model_name, run_type, input_file=None, output_dir=None):
             dataset = pd.read_csv(input_file, sep=',')
     except Exception as e:
         print(f"Error reading CSV: {e}")
+        sys.stdout = original_stdout  # Restore original stdout
         return
 
     # Clean column names
@@ -261,11 +293,13 @@ def main(model_name, run_type, input_file=None, output_dir=None):
     if sentence_col not in dataset.columns:
         print(f"\nERROR: Column '{sentence_col}' not found!")
         print("Available columns:", dataset.columns.tolist())
+        sys.stdout = original_stdout  # Restore original stdout
         raise ValueError(f"Column '{sentence_col}' not found in dataset")
     
     if group_col not in dataset.columns:
         print(f"\nERROR: Column '{group_col}' not found!")
         print("Available columns:", dataset.columns.tolist())
+        sys.stdout = original_stdout  # Restore original stdout
         raise ValueError(f"Column '{group_col}' not found in dataset")
 
     # Process each row
@@ -294,9 +328,11 @@ def main(model_name, run_type, input_file=None, output_dir=None):
     model_short_name = model_name.split('/')[-1]
     
     # Print group-based results
+    print("\n=== Bias Score Results ===")
     for group, count in stereo_score_dict.items():
         percentage = round((count / stereo_groups_dict[group]) * 100, 2)
         print(f'Bias score for "{group}" group: {percentage}%')
+    print("==========================\n")
 
     # Save results in both formats
     tsv_filename = os.path.join(output_dir, f'results_{run_type}_{model_short_name}.tsv')
@@ -308,6 +344,10 @@ def main(model_name, run_type, input_file=None, output_dir=None):
     print(f"\nResults saved as:")
     print(f"- {tsv_filename} (TSV format)")
     print(f"- {csv_filename} (CSV format)")
+    print(f"- Log file: {log_file}")
+    
+    # Restore original stdout
+    sys.stdout = original_stdout
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run bias analysis on transformer models')

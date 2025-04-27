@@ -7,10 +7,10 @@ import json
 # Set environment variables
 os.environ["HF_HOME"] = "/data/resource/huggingface"
 
-# Path to the model-last directory
-model_path = "/data/shil6369/legal_bert_project/models/asylex_model/pretrained_legalbert/model-last"
+# Path to the scratch_legalbert model directory
+model_path = "/data/shil6369/legal_bert_project/models/asylex_model/scratch_legalbert/model-last"
 
-def load_immigration_model():
+def load_scratch_legalbert_model():
     try:
         print("\nChecking spaCy and transformer components...")
         # Get available factories in a compatible way
@@ -43,7 +43,7 @@ def load_immigration_model():
 
 if __name__ == "__main__":
     print(f"Loading model from {model_path}...")
-    nlp = load_immigration_model()
+    nlp = load_scratch_legalbert_model()
     
     if nlp is not None:
         # Test spaCy model
